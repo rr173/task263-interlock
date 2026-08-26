@@ -106,7 +106,6 @@ func buildGraph(segS *store.SegmentStore, swS *store.SwitchStore, rtS *store.Rou
 func runValidation(ver *model.InterlockingVersion, g *topology.Graph, cfS *store.ConflictStore, verS *store.VersionStore) ([]*model.Conflict, error) {
 	// 规则前置校验
 	checker := rule.NewChecker(g)
-	var routes []*model.Route
 	for _, rid := range ver.RouteIDs {
 		r, ok := g.Routes[rid]
 		if !ok {
@@ -115,10 +114,6 @@ func runValidation(ver *model.InterlockingVersion, g *topology.Graph, cfS *store
 		if err := checker.CheckRoute(r); err != nil {
 			return nil, err
 		}
-		routes = append(routes, r)
-	}
-	if _, err := checker.PresetSwitches(routes); err != nil {
-		return nil, err
 	}
 
 	// 执行验证

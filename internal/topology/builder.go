@@ -72,7 +72,7 @@ func Hash(segs []*model.Segment, sws []*model.Switch, routes []*model.Route) (st
 		lines = append(lines, fmt.Sprintf("sw|%s|%s|%s|%s|%s", s.ID, s.Name, s.Position, s.NormalTo, s.ReverseTo))
 	}
 	for _, r := range routes {
-		parts := []string{"route", r.ID, r.Name, r.OriginSeg, r.DestSeg}
+		parts := []string{"route", r.ID, r.Name, r.OriginSeg, r.DestSeg, strings.Join(r.PathSegs, ">")}
 		for _, sw := range r.Switches {
 			parts = append(parts, sw.SwitchID+"="+string(sw.Position))
 		}

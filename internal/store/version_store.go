@@ -104,8 +104,8 @@ func (st *VersionStore) UpdateState(v *model.InterlockingVersion) error {
 		lastRaw = v.LastValidatedAt.Format(time.RFC3339)
 	}
 	res, err := st.db.Exec(
-		`UPDATE versions SET state=?, conflict_count=?, last_validated_at=?, exception_ids=?, updated_at=? WHERE id=?`,
-		v.State, v.ConflictCount, lastRaw, jsonEncode(v.ExceptionIDs),
+		`UPDATE versions SET state=?, route_ids=?, conflict_count=?, last_validated_at=?, exception_ids=?, updated_at=? WHERE id=?`,
+		v.State, jsonEncode(v.RouteIDs), v.ConflictCount, lastRaw, jsonEncode(v.ExceptionIDs),
 		time.Now().Format(time.RFC3339), v.ID)
 	if err != nil {
 		return err

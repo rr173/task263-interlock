@@ -1,13 +1,15 @@
-#!/usr/bin/env bash
-# 构建评测镜像：usage: bash build_benzhi_docker.sh <镜像名> <平台>
-# 例：bash build_benzhi_docker.sh my-project linux/arm64
-set -euo pipefail
+#!/bin/bash
+set -e
 
-IMAGE_NAME="${1:-task263-interlock}"
-PLATFORM="${2:-linux/amd64}"
+IMAGE_NAME=${1:-my-project}
+DOCKER_PLATFORM=${2:-linux/amd64}
 
-docker buildx build \
-  --platform "${PLATFORM}" \
-  -f benzhi.Dockerfile \
-  -t "${IMAGE_NAME}" \
-  .
+docker build --platform "$DOCKER_PLATFORM" -f benzhi.Dockerfile -t "$IMAGE_NAME" .
+
+echo ""
+echo "✅ Docker image '$IMAGE_NAME' built successfully!"
+echo ""
+echo "📋 Next steps (for testing):"
+echo "  • Smoke test：docker run --rm $IMAGE_NAME --smoke-test"
+echo "  • Start server：docker run --rm -P $IMAGE_NAME --addr :8080 --db ./app.db"
+echo ""

@@ -1,17 +1,13 @@
-# 单阶段构建：编译后直接以二进制运行
-FROM golang:1.26.3-bookworm AS build
+FROM docker.m.daocloud.io/library/golang:1.26.3-bookworm AS build
 
-WORKDIR /src
+WORKDIR /app
+ENV GOPROXY=https://goproxy.cn,direct GOSUMDB=sum.golang.google.cn GOTOOLCHAIN=local
 COPY go.mod go.sum ./
 RUN go mod download
-
 COPY . .
-ENV CGO_ENABLED=0 GOOS=linux
-RUN go build -o /out/task263 ./cmd/task263
+RUN CGO_ENABLED=0 go build -o /app/task263 ./cmd/task263
 
-FROM debian:bookworm-slim
-WORKDIR /app
-COPY --from=build /out/task263 /usr/local/bin/task263
-EXPOSE 8080
-ENTRYPOINT ["task263"]
-CMD ["--addr", ":8080", "--db", "/app/task263.db", "--smoke-test"]
+FROM docker.m.daocloud.io/library/alpine:3.20
+COPY --from=build /app/task263 /app/task263
+ENTRYPOINT ["/app/task263"]
+CMD ["--smoke-test"]
