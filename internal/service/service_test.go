@@ -18,6 +18,88 @@ func newTestServices(t *testing.T) *Services {
 	return New(db)
 }
 
+// TestSharedSegmentConflictDetected 复现“共享区段未被报告”缺陷：
+// 两条进路共用起始区段但无道岔竞争，shared_segment 应是唯一冲突，
+// 必须被写回报告并使版本进入 has_conflict。
+func TestSharedSegmentConflictDetected(t *testing.T) {
+	svc := newTestServices(t)
+
+	for _, id := range []string{"seg-a", "seg-b", "seg-c"} {
+		if _, err := svc.Segments.Create(&model.Segment{
+			ID: id, Name: "seg" + id, Kind: model.SegmentPlain, LengthM: 100,
+		}); err != nil {
+			t.Fatalf("create segment %s: %v", id, err)
+		}
+	}
+
+	// 两条进路共用起点 seg-a，但各自走向不同终点，无道岔要求、无道岔竞争。
+	rt1, err := svc.Routes.Create(&model.Route{
+		ID: "r1", Name: "上行", OriginSeg: "seg-a", DestSeg: "seg-b",
+		PathSegs: []string{"seg-a", "seg-b"},
+	})
+	if err != nil {
+		t.Fatalf("create r1: %v", err)
+	}
+	rt2, err := svc.Routes.Create(&model.Route{
+		ID: "r2", Name: "下行", OriginSeg: "seg-a", DestSeg: "seg-c",
+		PathSegs: []string{"seg-a", "seg-c"},
+	})
+	if err != nil {
+		t.Fatalf("create r2: %v", err)
+	}
+	_ = rt1
+	_ = rt2
+
+	ver, err := svc.Versions.Create("shared-seg")
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	for _, rid := range []string{"r1", "r2"} {
+		if _, err := svc.Versions.AttachRoute(ver.ID, rid); err != nil {
+			t.Fatalf("attach %s: %v", rid, err)
+		}
+	}
+
+	conflicts, err := svc.ValidateVersion(ver.ID)
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+
+	var shared *model.Conflict
+	for _, c := range conflicts {
+		if c.Kind == model.ConflictSharedSegment {
+			shared = c
+		}
+	}
+	if shared == nil {
+		t.Fatalf("应报告 shared_segment 冲突，实际冲突 %v", conflictKinds(conflicts))
+	}
+	if shared.ObjectID != "seg-a" {
+		t.Fatalf("共享区段应为 seg-a，实际 %s", shared.ObjectID)
+	}
+	// 写回后落库可查
+	persisted, err := svc.Conflicts.ListByVersion(ver.ID)
+	if err != nil {
+		t.Fatalf("list conflicts: %v", err)
+	}
+	if len(persisted) != len(conflicts) {
+		t.Fatalf("落库冲突数 %d 与报告数 %d 不符", len(persisted), len(conflicts))
+	}
+	// 版本应因冲突进入 has_conflict
+	v, _ := svc.Versions.Get(ver.ID)
+	if v.State != model.VersionHasConflict {
+		t.Fatalf("状态应为 has_conflict，实际 %s", v.State)
+	}
+}
+
+func conflictKinds(cs []*model.Conflict) []string {
+	out := make([]string, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, string(c.Kind))
+	}
+	return out
+}
+
 // TestFullLoop 覆盖完整闭环：拓扑 → 版本 → 冲突 → 例外 → 重新验证 → 快照。
 func TestFullLoop(t *testing.T) {
 	svc := newTestServices(t)

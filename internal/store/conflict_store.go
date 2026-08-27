@@ -63,7 +63,7 @@ func (st *ConflictStore) Get(id string) (*model.Conflict, error) {
 	return c, nil
 }
 
-// ListByVersion 按版本列出冲突（shared_segment 由服务层决定是否落库）。
+// ListByVersion 按版本列出冲突。
 func (st *ConflictStore) ListByVersion(versionID string) ([]*model.Conflict, error) {
 	rows, err := st.db.Query(`SELECT `+conflictCols+` FROM conflicts WHERE version_id=? ORDER BY created_at`, versionID)
 	if err != nil {

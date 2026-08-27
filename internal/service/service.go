@@ -125,9 +125,6 @@ func runValidation(ver *model.InterlockingVersion, g *topology.Graph, cfS *store
 	}
 	persisted := make([]*model.Conflict, 0, len(res.Conflicts))
 	for i, c := range res.Conflicts {
-		if c.Kind == model.ConflictSharedSegment {
-			continue
-		}
 		if c.ID == "" {
 			c.ID = fmt.Sprintf("cf-%s-%03d", ver.ID, i+1)
 		}
