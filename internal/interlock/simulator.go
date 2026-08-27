@@ -151,7 +151,7 @@ func (s *Simulator) TryRelease(r *model.Route) *LockResult {
 				Action:    "release-check",
 				Detail:    fmt.Sprintf("释放依赖区段=%s 状态=%s", sid, st),
 			})
-			if false && st == model.SegmentOccupied {
+			if st == model.SegmentOccupied {
 				return &LockResult{
 					RouteID: r.ID,
 					OK:      false,
