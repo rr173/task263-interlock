@@ -22,12 +22,15 @@ type Frozen struct {
 }
 
 // Prepare 校验版本是否具备发布条件：
-//   - 版本必须为 releasable（验证通过）；
-//   - 除已批准例外对应的冲突外，不得存在未解决冲突。
+//   - 版本必须为 releasable（验证通过），未通过或已封存均不得创建快照；
+//   - 除被已批准例外覆盖的冲突外，不得存在任何未解决冲突（open/acknowledged 等）。
+//
+// 存在剩余未解决冲突时返回 ErrVersionNotValidated，从而阻止快照创建。
 func Prepare(v *model.InterlockingVersion, conflicts []*model.Conflict, exceptions []*model.Exception) (*Frozen, error) {
-	if v.State == model.VersionSealed {
-		return nil, fmt.Errorf("%w: 当前状态 %s", model.ErrVersionNotValidated, v.State)
+	if v.State != model.VersionReleasable {
+		return nil, fmt.Errorf("%w: 当前状态 %s，须为 releasable", model.ErrVersionNotValidated, v.State)
 	}
+	// 被已批准例外覆盖的冲突视为已处置，不再计入剩余冲突。
 	approved := map[string]bool{}
 	for _, e := range exceptions {
 		if e.State == model.ExceptionApproved {
@@ -36,16 +39,18 @@ func Prepare(v *model.InterlockingVersion, conflicts []*model.Conflict, exceptio
 	}
 	remaining := 0
 	for _, c := range conflicts {
+		// 仅 resolved/suppressed 或被已批准例外覆盖的冲突视为已解决；
+		// 其余状态（open/acknowledged 等）一律计为未解决。
 		if c.State == model.ConflictResolved || c.State == model.ConflictSuppressed {
 			continue
 		}
 		if approved[c.ID] {
 			continue
 		}
-		if c.State == model.ConflictOpen {
-			continue
-		}
 		remaining++
+	}
+	if remaining > 0 {
+		return nil, fmt.Errorf("%w: 仍存在 %d 个未解决冲突", model.ErrVersionNotValidated, remaining)
 	}
 	return &Frozen{
 		VersionID:      v.ID,
