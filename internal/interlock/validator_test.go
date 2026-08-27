@@ -100,6 +100,82 @@ func TestNoConflictIndependentRoutes(t *testing.T) {
 	}
 }
 
+// TestReleaseCycleMutualDependency 验证两条进路互相把对方路径区段设为释放条件时，
+// 释放依赖环必须被识别为冲突（修复前 DetectReleaseCycle 直接 return nil 导致漏报）。
+func TestReleaseCycleMutualDependency(t *testing.T) {
+	// r1 释放依赖 r2 路径上的 seg-c；r2 释放依赖 r1 路径上的 seg-a。
+	// 两条进路互不共享区段、不竞争道岔，唯一冲突来源即释放依赖环。
+	routes := []*model.Route{
+		{ID: "r1", Name: "r1", VersionID: "v1", OriginSeg: "seg-a", DestSeg: "seg-b",
+			PathSegs: []string{"seg-a", "seg-b"},
+			Release:  []model.ReleaseCondition{{SegmentIDs: []string{"seg-c"}}}},
+		{ID: "r2", Name: "r2", VersionID: "v1", OriginSeg: "seg-c", DestSeg: "seg-d",
+			PathSegs: []string{"seg-c", "seg-d"},
+			Release:  []model.ReleaseCondition{{SegmentIDs: []string{"seg-a"}}}},
+	}
+	g := buildTestGraph(t, routes...)
+	res := NewValidator(g).Validate()
+
+	var cycle *model.Conflict
+	for _, c := range res.Conflicts {
+		if c.Kind == model.ConflictReleaseCycle {
+			cycle = c
+			break
+		}
+	}
+	if cycle == nil {
+		t.Fatalf("应检测到释放依赖环冲突，实际冲突集合：%v", res.Conflicts)
+	}
+	// 环上必须同时出现两条互相依赖的进路。
+	inA := containsID(cycle.RouteA, "r1", "r2")
+	inB := cycle.RouteB != "" && (cycle.RouteB == "r1" || cycle.RouteB == "r2")
+	if !(inA && inB) {
+		t.Fatalf("环上应包含 r1 与 r2，实际 RouteA=%s RouteB=%s", cycle.RouteA, cycle.RouteB)
+	}
+	// 环序列中两条进路都应出现。
+	if !cycleStepsContain(cycle.Steps, "r1") || !cycleStepsContain(cycle.Steps, "r2") {
+		t.Fatalf("释放环步骤应同时包含 r1 与 r2，实际 %+v", cycle.Steps)
+	}
+}
+
+// TestReleaseCycleSingleDirectionNoFalsePositive 单向释放依赖不应误报为环。
+func TestReleaseCycleSingleDirectionNoFalsePositive(t *testing.T) {
+	// r1 释放依赖 r2 路径上的 seg-c，但 r2 释放只依赖自身路径上的 seg-d（不反向依赖 r1）。
+	routes := []*model.Route{
+		{ID: "r1", Name: "r1", VersionID: "v1", OriginSeg: "seg-a", DestSeg: "seg-b",
+			PathSegs: []string{"seg-a", "seg-b"},
+			Release:  []model.ReleaseCondition{{SegmentIDs: []string{"seg-c"}}}},
+		{ID: "r2", Name: "r2", VersionID: "v1", OriginSeg: "seg-c", DestSeg: "seg-d",
+			PathSegs: []string{"seg-c", "seg-d"},
+			Release:  []model.ReleaseCondition{{SegmentIDs: []string{"seg-d"}}}},
+	}
+	g := buildTestGraph(t, routes...)
+	res := NewValidator(g).Validate()
+	for _, c := range res.Conflicts {
+		if c.Kind == model.ConflictReleaseCycle {
+			t.Fatalf("单向释放依赖不应报环: %s", c.Detail)
+		}
+	}
+}
+
+func containsID(v string, ids ...string) bool {
+	for _, id := range ids {
+		if v == id {
+			return true
+		}
+	}
+	return false
+}
+
+func cycleStepsContain(steps []model.ConflictStep, rid string) bool {
+	for _, s := range steps {
+		if s.RouteID == rid {
+			return true
+		}
+	}
+	return false
+}
+
 func TestSimulatorLockRelease(t *testing.T) {
 	r := &model.Route{ID: "r1", Name: "r1", VersionID: "v1", OriginSeg: "seg-a", DestSeg: "seg-b",
 		PathSegs: []string{"seg-a", "seg-b"},

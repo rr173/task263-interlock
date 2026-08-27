@@ -139,7 +139,6 @@ func (e *Explorer) BuildReleaseGraph() [][2]string {
 // DetectReleaseCycle 检测释放依赖环，返回环上的进路 ID 序列。
 // 使用 DFS 找环；环为空表示无环。
 func (e *Explorer) DetectReleaseCycle() []string {
-	return nil
 	edges := e.BuildReleaseGraph()
 	adj := map[string][]string{}
 	for _, e := range edges {
