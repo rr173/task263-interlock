@@ -136,3 +136,49 @@ func TestSimulatorLockRelease(t *testing.T) {
 		t.Fatalf("进路应已解锁")
 	}
 }
+
+// TestSimulatorPreservesNonClearState 验证模拟器初始化时保留持久化区段状态，
+// 而非将所有区段重置为 clear——否则 reserved/unknown 区段会掩盖锁闭阻断。
+func TestSimulatorPreservesNonClearState(t *testing.T) {
+	r := &model.Route{ID: "r1", Name: "r1", VersionID: "v1", OriginSeg: "seg-a", DestSeg: "seg-b",
+		PathSegs: []string{"seg-a", "seg-b"}}
+	g := buildTestGraph(t, r)
+	// 直接将 seg-b 置为非空闲态（模拟持久化后的运行状态）
+	g.Segments["seg-b"].State = model.SegmentReserved
+	sim := NewSimulator(g)
+	if st, _ := sim.SegmentState("seg-b"); st != model.SegmentReserved {
+		t.Fatalf("模拟器应保留 reserved 状态，实际 %s", st)
+	}
+	lr := sim.TryLock(r)
+	if lr.OK {
+		t.Fatalf("路径含非空闲区段应锁闭失败")
+	}
+}
+
+// TestValidatorLockingBlockOnNonClearSegment 验证路径区段处于 reserved/unknown
+// 等非 clear 状态时，验证器应产出 locking_block 冲突而非掩盖为可锁闭。
+func TestValidatorLockingBlockOnNonClearSegment(t *testing.T) {
+	r := &model.Route{ID: "r1", Name: "r1", VersionID: "v1", OriginSeg: "seg-a", DestSeg: "seg-b",
+		PathSegs: []string{"seg-a", "seg-b"}}
+	for _, st := range []model.SegmentState{model.SegmentReserved, model.SegmentUnknown, model.SegmentOccupied} {
+		g := buildTestGraph(t, r)
+		g.Segments["seg-b"].State = st
+		res := NewValidator(g).Validate()
+		var block *model.Conflict
+		for _, c := range res.Conflicts {
+			if c.Kind == model.ConflictLockingBlock {
+				block = c
+				break
+			}
+		}
+		if block == nil {
+			t.Fatalf("区段 seg-b 处于 %s 时应产出 locking_block，实际冲突数=%d", st, len(res.Conflicts))
+		}
+		if block.RouteA != "r1" {
+			t.Fatalf("locking_block 应指向 r1，实际 %s", block.RouteA)
+		}
+		if block.VersionID != "v1" {
+			t.Fatalf("locking_block 版本应为 v1，实际 %s", block.VersionID)
+		}
+	}
+}

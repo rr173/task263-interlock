@@ -29,6 +29,10 @@ type Simulator struct {
 }
 
 // NewSimulator 从拓扑图创建模拟器，初始为全空闲状态。
+//
+// 区段初始状态取自拓扑图中的持久化区段状态：reserved/unknown/occupied
+// 等非 clear 状态会被保留，使依赖这些区段的进路在 TryLock 时被阻断并
+// 产生 locking_block，而非被掩盖为可锁闭。
 func NewSimulator(g *topology.Graph) *Simulator {
 	s := &Simulator{
 		graph:    g,
@@ -36,8 +40,12 @@ func NewSimulator(g *topology.Graph) *Simulator {
 		swPos:    map[string]model.SwitchPosition{},
 		locked:   map[string]bool{},
 	}
-	for id := range g.Segments {
-		s.segState[id] = model.SegmentClear
+	for id, seg := range g.Segments {
+		if seg.State == "" {
+			s.segState[id] = model.SegmentClear
+		} else {
+			s.segState[id] = seg.State
+		}
 	}
 	for id, sw := range g.Switches {
 		if sw.Position == model.SwitchUnknown {

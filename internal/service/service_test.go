@@ -214,3 +214,77 @@ func TestIdempotentAttach(t *testing.T) {
 		t.Fatalf("重复挂载导致 RouteIDs 含 %d 个相同进路", count)
 	}
 }
+
+// TestValidateLockingBlockPersisted 验证路径区段处于非空闲态时，锁闭阻断
+// 冲突（locking_block）被完整写回存储并在验证报告中上报。
+// 回归：此前 runValidation 显式跳过 locking_block，导致报告里缺失该冲突。
+func TestValidateLockingBlockPersisted(t *testing.T) {
+	svc := newTestServices(t)
+
+	for _, id := range []string{"seg-a", "seg-b"} {
+		if _, err := svc.Segments.Create(&model.Segment{
+			ID: id, Name: "seg" + id, Kind: model.SegmentPlain, LengthM: 100,
+		}); err != nil {
+			t.Fatalf("create segment %s: %v", id, err)
+		}
+	}
+	// 将路径区段 seg-b 置为 reserved（非空闲），进路锁闭应被阻断
+	if _, err := svc.Segments.Occupy("seg-b"); err != nil {
+		t.Fatalf("occupy seg-b: %v", err)
+	}
+
+	if _, err := svc.Routes.Create(&model.Route{
+		ID: "r1", Name: "进路1", OriginSeg: "seg-a", DestSeg: "seg-b",
+		PathSegs: []string{"seg-a", "seg-b"},
+	}); err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+
+	ver, err := svc.Versions.Create("v-lock")
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if _, err := svc.Versions.AttachRoute(ver.ID, "r1"); err != nil {
+		t.Fatalf("attach r1: %v", err)
+	}
+
+	conflicts, err := svc.ValidateVersion(ver.ID)
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+
+	var block *model.Conflict
+	for _, c := range conflicts {
+		if c.Kind == model.ConflictLockingBlock {
+			block = c
+			break
+		}
+	}
+	if block == nil {
+		t.Fatalf("验证报告应包含 locking_block，实际冲突数=%d", len(conflicts))
+	}
+	if block.RouteA != "r1" {
+		t.Fatalf("locking_block 应指向 r1，实际 %s", block.RouteA)
+	}
+	// 写回应持久化到存储，可经冲突服务再次读取
+	persisted, err := svc.Conflicts.ListByVersion(ver.ID)
+	if err != nil {
+		t.Fatalf("list conflicts: %v", err)
+	}
+	found := false
+	for _, c := range persisted {
+		if c.Kind == model.ConflictLockingBlock {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("locking_block 未持久化到存储")
+	}
+	ver2, _ := svc.Versions.Get(ver.ID)
+	if ver2.State != model.VersionHasConflict {
+		t.Fatalf("存在锁闭阻断版本应为 has_conflict，实际 %s", ver2.State)
+	}
+	if ver2.ConflictCount != len(conflicts) {
+		t.Fatalf("ConflictCount 应等于报告冲突数，实际 %d/%d", ver2.ConflictCount, len(conflicts))
+	}
+}

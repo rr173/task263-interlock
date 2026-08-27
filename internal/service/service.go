@@ -119,15 +119,14 @@ func runValidation(ver *model.InterlockingVersion, g *topology.Graph, cfS *store
 	// 执行验证
 	res := interlock.NewValidator(g).Validate()
 
-	// 写回冲突
+	// 写回冲突（重新验证前先按版本清理旧集合）。
+	// 锁闭阻断（locking_block）同样需写回，使区段非空闲导致的
+	// 锁定阻断能在验证报告与版本冲突集合中完整上报。
 	if err := cfS.DeleteByVersion(ver.ID); err != nil {
 		return nil, err
 	}
 	persisted := make([]*model.Conflict, 0, len(res.Conflicts))
 	for i, c := range res.Conflicts {
-		if c.Kind == model.ConflictLockingBlock {
-			continue
-		}
 		if c.ID == "" {
 			c.ID = fmt.Sprintf("cf-%s-%03d", ver.ID, i+1)
 		}
