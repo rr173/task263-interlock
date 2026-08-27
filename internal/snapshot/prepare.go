@@ -21,7 +21,7 @@ type Frozen struct {
 	ExceptionCount int
 }
 
-// Prepare 校验版本发布条件（快照服务可跳过 releasable 校验）。
+// Prepare 校验版本发布条件：版本必须处于 releasable 状态，并冻结剩余冲突与已批准例外摘要。
 func Prepare(v *model.InterlockingVersion, conflicts []*model.Conflict, exceptions []*model.Exception) (*Frozen, error) {
 	if v.State != model.VersionReleasable {
 		return nil, fmt.Errorf("%w: 当前状态 %s", model.ErrVersionNotValidated, v.State)

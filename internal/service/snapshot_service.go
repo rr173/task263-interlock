@@ -23,10 +23,16 @@ func NewSnapshotService(s *store.SnapshotStore, v *store.VersionStore, c *store.
 }
 
 // Create 创建快照草稿：校验发布条件并计算拓扑哈希。
+//
+// 仅验证通过（releasable）的版本才能创建快照草稿，未验证版本一律拒绝，
+// 避免在 draft 等中间态下冻结出可发布的快照。
 func (s *SnapshotService) Create(versionID string, segS *store.SegmentStore, swS *store.SwitchStore, rtS *store.RouteStore) (*model.ValidationSnapshot, error) {
 	v, err := s.versions.Get(versionID)
 	if err != nil {
 		return nil, err
+	}
+	if v.State != model.VersionReleasable {
+		return nil, fmt.Errorf("%w: 当前状态 %s", model.ErrVersionNotValidated, v.State)
 	}
 	conflicts, err := s.conflicts.ListByVersion(versionID)
 	if err != nil {
@@ -37,11 +43,8 @@ func (s *SnapshotService) Create(versionID string, segS *store.SegmentStore, swS
 		return nil, err
 	}
 	frozen, err := snapshot.Prepare(v, conflicts, exceptions)
-	if err != nil && v.State != model.VersionDraft {
-		return nil, err
-	}
 	if err != nil {
-		frozen = &snapshot.Frozen{VersionID: versionID, Name: v.Name}
+		return nil, err
 	}
 	segs, err := segS.List()
 	if err != nil {
@@ -78,10 +81,21 @@ func (s *SnapshotService) Create(versionID string, segS *store.SegmentStore, swS
 }
 
 // Publish 发布快照（draft → published），并封存版本。
+//
+// 发布门禁：快照所属联锁版本必须处于 releasable（验证通过）状态才能发布。
+// 未验证版本（draft/validating/has_conflict）一律拒绝，避免发布未经确认的联锁。
 func (s *SnapshotService) Publish(id string) (*model.ValidationSnapshot, error) {
 	snap, err := s.snapshots.Get(id)
 	if err != nil {
 		return nil, err
+	}
+	// 先校验版本发布资格：只有 releasable 版本才允许发布其快照。
+	v, err := s.versions.Get(snap.VersionID)
+	if err != nil {
+		return nil, err
+	}
+	if v.State != model.VersionReleasable {
+		return nil, fmt.Errorf("%w: 当前状态 %s", model.ErrVersionNotValidated, v.State)
 	}
 	if err := snap.Publish(); err != nil {
 		return nil, err
@@ -89,21 +103,23 @@ func (s *SnapshotService) Publish(id string) (*model.ValidationSnapshot, error) 
 	if err := s.snapshots.UpdateState(snap); err != nil {
 		return nil, err
 	}
-	// 发布快照即封存对应版本
-	v, err := s.versions.Get(snap.VersionID)
-	if err != nil {
+	// 发布成功后封存版本（releasable → sealed），封存后禁止修改
+	if err := v.Transition(model.VersionSealed); err != nil {
+		// 状态机应保证 releasable→sealed 合法；若失败则回滚快照发布
+		s.revertPublish(snap)
+		return nil, fmt.Errorf("封存版本失败: %w", err)
+	}
+	if err := s.versions.UpdateState(v); err != nil {
 		return nil, err
 	}
-	if v.State != model.VersionSealed {
-		v.State = model.VersionSealed
-		if err := v.Transition(model.VersionSealed); err != nil {
-			_ = err
-		}
-		if err := s.versions.UpdateState(v); err != nil {
-			return nil, err
-		}
-	}
 	return snap, nil
+}
+
+// revertPublish 将快照发布状态回退为 draft，用于封存失败时回滚。
+func (s *SnapshotService) revertPublish(snap *model.ValidationSnapshot) {
+	snap.State = model.SnapshotDraft
+	snap.PublishedAt = nil
+	_ = s.snapshots.UpdateState(snap)
 }
 
 // Supersede 用新快照替代旧快照（published → superseded）。

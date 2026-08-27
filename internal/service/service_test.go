@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -127,6 +128,76 @@ func TestFullLoop(t *testing.T) {
 	// 发布快照后版本封存，禁止修改
 	if _, err := svc.Versions.ExcludeRoute(ver.ID, "r1"); err == nil {
 		t.Fatalf("封存后排除进路应失败")
+	}
+}
+
+// TestSnapshotGateRejectsUnverified 验证快照发布门禁：
+// 未验证版本（draft）既不能创建快照草稿，也不能发布任何快照。
+func TestSnapshotGateRejectsUnverified(t *testing.T) {
+	svc := newTestServices(t)
+
+	// 建拓扑与一条进路，但版本保持 draft（未执行验证）
+	if _, err := svc.Segments.Create(&model.Segment{
+		ID: "s1", Name: "seg", Kind: model.SegmentPlain, LengthM: 50,
+	}); err != nil {
+		t.Fatalf("create segment: %v", err)
+	}
+	if _, err := svc.Segments.Create(&model.Segment{
+		ID: "s2", Name: "seg2", Kind: model.SegmentPlain, LengthM: 50,
+	}); err != nil {
+		t.Fatalf("create segment2: %v", err)
+	}
+	if _, err := svc.Routes.Create(&model.Route{
+		ID: "r1", Name: "route", OriginSeg: "s1", DestSeg: "s2",
+		PathSegs: []string{"s1", "s2"},
+	}); err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+	ver, err := svc.Versions.Create("v-draft")
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if _, err := svc.Versions.AttachRoute(ver.ID, "r1"); err != nil {
+		t.Fatalf("attach route: %v", err)
+	}
+	v, _ := svc.Versions.Get(ver.ID)
+	if v.State != model.VersionDraft {
+		t.Fatalf("前置：版本应为 draft，实际 %s", v.State)
+	}
+
+	// 门禁 1：未验证版本不能创建快照草稿
+	if _, err := svc.CreateSnapshot(ver.ID); err == nil {
+		t.Fatalf("draft 版本不应允许创建快照")
+	} else if !errors.Is(err, model.ErrVersionNotValidated) {
+		t.Fatalf("创建快照应返回 ErrVersionNotValidated，实际 %v", err)
+	}
+
+	// 即使绕过 Create、用持久化层直接塞入一张属于 draft 版本的快照草稿，
+	// Publish 也必须拒绝发布（这是发布门禁的最终防线）。
+	draftSnap := &model.ValidationSnapshot{
+		ID:        "snap-forced",
+		VersionID: ver.ID,
+		Name:      "强制草稿",
+		State:     model.SnapshotDraft,
+		CreatedAt: Now(),
+		UpdatedAt: Now(),
+	}
+	if err := svc.SnapshotSt.Create(draftSnap); err != nil {
+		t.Fatalf("create forced draft snapshot: %v", err)
+	}
+	if _, err := svc.Snapshots.Publish(draftSnap.ID); err == nil {
+		t.Fatalf("draft 版本的快照不应允许发布")
+	} else if !errors.Is(err, model.ErrVersionNotValidated) {
+		t.Fatalf("发布快照应返回 ErrVersionNotValidated，实际 %v", err)
+	}
+	// 发布失败后快照仍为 draft，版本仍为 draft，未被静默封存
+	snap, _ := svc.Snapshots.Get(draftSnap.ID)
+	if snap.State != model.SnapshotDraft {
+		t.Fatalf("发布失败后快照应保持 draft，实际 %s", snap.State)
+	}
+	v2, _ := svc.Versions.Get(ver.ID)
+	if v2.State != model.VersionDraft {
+		t.Fatalf("发布失败后版本应保持 draft，实际 %s", v2.State)
 	}
 }
 
