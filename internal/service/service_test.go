@@ -130,6 +130,75 @@ func TestFullLoop(t *testing.T) {
 	}
 }
 
+// TestApproveSuppressesAllKinds 验证例外批准对所有冲突类型统一压制，
+// 而非仅道岔竞争（回归：共享区段冲突批准后曾停留在 open）。
+func TestApproveSuppressesAllKinds(t *testing.T) {
+	svc := newTestServices(t)
+
+	for _, id := range []string{"seg-a", "seg-b", "seg-c"} {
+		if _, err := svc.Segments.Create(&model.Segment{
+			ID: id, Name: "seg" + id, Kind: model.SegmentPlain, LengthM: 100,
+		}); err != nil {
+			t.Fatalf("create segment %s: %v", id, err)
+		}
+	}
+
+	// 两条进路共享 seg-a，但使用各自独立的终点，不竞争任何道岔 → shared_segment 冲突。
+	if _, err := svc.Routes.Create(&model.Route{
+		ID: "r1", Name: "直向", OriginSeg: "seg-a", DestSeg: "seg-b",
+		PathSegs: []string{"seg-a", "seg-b"},
+	}); err != nil {
+		t.Fatalf("create r1: %v", err)
+	}
+	if _, err := svc.Routes.Create(&model.Route{
+		ID: "r2", Name: "侧向", OriginSeg: "seg-a", DestSeg: "seg-c",
+		PathSegs: []string{"seg-a", "seg-c"},
+	}); err != nil {
+		t.Fatalf("create r2: %v", err)
+	}
+
+	ver, err := svc.Versions.Create("v-shared")
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	for _, rid := range []string{"r1", "r2"} {
+		if _, err := svc.Versions.AttachRoute(ver.ID, rid); err != nil {
+			t.Fatalf("attach %s: %v", rid, err)
+		}
+	}
+
+	conflicts, err := svc.ValidateVersion(ver.ID)
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	var shared *model.Conflict
+	for _, c := range conflicts {
+		if c.Kind == model.ConflictSharedSegment {
+			shared = c
+			break
+		}
+	}
+	if shared == nil {
+		t.Fatalf("应产生共享区段冲突，实际冲突数=%d", len(conflicts))
+	}
+	if shared.State != model.ConflictOpen {
+		t.Fatalf("新冲突应为 open，实际 %s", shared.State)
+	}
+
+	exc, err := svc.Exceptions.Create(ver.ID, shared.ID, "受控例外", "tester")
+	if err != nil {
+		t.Fatalf("create exception: %v", err)
+	}
+	if _, err := svc.Exceptions.Approve(exc.ID); err != nil {
+		t.Fatalf("approve exception: %v", err)
+	}
+
+	got, _ := svc.Conflicts.Get(shared.ID)
+	if got.State != model.ConflictSuppressed {
+		t.Fatalf("共享区段冲突经批准应被压制，实际 %s", got.State)
+	}
+}
+
 // TestPersistAndRecover 验证重启恢复：数据库重开后实体与状态仍在。
 func TestPersistAndRecover(t *testing.T) {
 	dir := t.TempDir()

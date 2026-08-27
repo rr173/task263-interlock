@@ -67,13 +67,8 @@ func (s *ExceptionService) Approve(id string) (*model.Exception, error) {
 	if err := s.exceptions.UpdateState(id, e.State); err != nil {
 		return nil, err
 	}
-	c, err := s.conflicts.Get(e.ConflictID)
-	if err != nil {
-		return nil, err
-	}
-	if c.Kind != model.ConflictSwitchContention {
-		return e, nil
-	}
+	// 批准例外即压制对应冲突，与冲突类型无关（道岔竞争、共享区段、释放环、
+	// 锁定阻断等均应同步为 suppressed）。UpdateState 在冲突不存在时返回 ErrNotFound。
 	if err := s.conflicts.UpdateState(e.ConflictID, model.ConflictSuppressed); err != nil {
 		return nil, err
 	}
