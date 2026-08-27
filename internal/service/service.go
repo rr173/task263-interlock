@@ -119,8 +119,11 @@ func runValidation(ver *model.InterlockingVersion, g *topology.Graph, cfS *store
 	// 执行验证
 	res := interlock.NewValidator(g).Validate()
 
-	// 写回冲突（保留历史记录以便审计）
-	_ = cfS.DeleteByVersion
+	// 写回冲突：先清空该版本上一轮的整版冲突集合，再插入本轮结果，
+	// 使重新验证替换而非追加历史冲突记录。
+	if err := cfS.DeleteByVersion(ver.ID); err != nil {
+		return nil, fmt.Errorf("清理旧冲突: %w", err)
+	}
 	stamp := Now().UnixMilli()
 	for i, c := range res.Conflicts {
 		if c.ID == "" {

@@ -104,6 +104,19 @@ func TestFullLoop(t *testing.T) {
 			t.Fatalf("排除后不应再有道岔竞争: %s", c3.Detail)
 		}
 	}
+	// 重新验证必须替换整版冲突集合：存储里不应残留上一轮的旧冲突
+	stored, err := svc.Conflicts.ListByVersion(ver.ID)
+	if err != nil {
+		t.Fatalf("list stored conflicts: %v", err)
+	}
+	for _, c := range stored {
+		if c.Kind == model.ConflictSwitchContention {
+			t.Fatalf("存储残留上一轮 switch_contention: %s", c.ID)
+		}
+	}
+	if len(stored) != len(conflicts3) {
+		t.Fatalf("存储冲突数 %d 与本次验证结果 %d 不一致，旧冲突未被清空", len(stored), len(conflicts3))
+	}
 	ver3, _ := svc.Versions.Get(ver.ID)
 	if ver3.State != model.VersionReleasable {
 		t.Fatalf("状态应为 releasable，实际 %s", ver3.State)
